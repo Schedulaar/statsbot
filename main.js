@@ -1,4 +1,13 @@
 // statsbot
+var fs = require('fs')
+
+function save(db) {
+	fs.writeFileSync('./stats.json', JSON.stringify(db));
+}
+
+function read() {
+	return fs.existsSync('./stats.json') ? JSON.parse(fs.readFileSync('./stats.json')) : {}
+}
 
 var log = require('log-simple')()
 
@@ -13,37 +22,28 @@ if (config && config.debug) {
 log.debug('successfully loaded configuration')
 
 // db setup
-var jsop = require('jsop')
-var db = jsop('stats.json')
+var db = read()
 if (!db.channels) db.channels = {}
 if (!db.users) db.users = {}
+save(db)
 
 // client setup
-var client = require('coffea')()
+var TelegramBot = require('node-telegram-bot-api')
 var emoji = require('node-emoji').emoji
 
-var network_config = {}
-var id = 0
-config.networks.forEach(function (network) {
-  network.id = '' + id
-  client.add(network)
-  log.debug('connecting to network ' + id + ':', JSON.stringify(network))
-  network_config[id] = network
-  id++
-})
+var bot = new TelegramBot(config.networks[0].token, {polling: true})
 
 // bot begins here
 function name (data) {
   if (!data) return undefined
   // FIXME: coffea-telegram workaround, channel should be .name not .title
-  return data.nick || data.name || data.title
+  return (data.first_name && data.last_name && data.first_name + " " + data.last_name) || data.username || data.title
 }
 
 // event handlers
-function processEvent (event, type) {
-  var c = name(event && event.channel)
-  var u = name(event && event.user)
-
+function processEvent (msg, type) {
+  var c = name(msg.chat)
+  var u = name(msg.from)
   log.debug('processing "' + type + '" event by "' + u + '" in "' + c + '"')
 
   if (c) {
@@ -51,11 +51,11 @@ function processEvent (event, type) {
     if (!db.channels[c][type]) db.channels[c][type] = 0
     db.channels[c][type]++
 
-    if (event.user) {
+	// if user
       if (!db.channels[c].users[u]) db.channels[c].users[u] = {}
       if (!db.channels[c].users[u][type]) db.channels[c].users[u][type] = 0
       db.channels[c].users[u][type]++
-    }
+	
   }
 
   if (u) {
@@ -63,11 +63,12 @@ function processEvent (event, type) {
     if (!db.users[u][type]) db.users[u][type] = 0
     db.users[u][type]++
   }
+  save(db)
 }
 
 function processEventFactory (type) {
-  return function (event) {
-    return processEvent(event, type)
+  return function (msg) {
+    return processEvent(msg, type)
   }
 }
 
@@ -79,8 +80,7 @@ function stats (type, emoji) {
 }
 
 function cmdStats (data) {
-  // FIXME: (/2) is a dirty workaround for coffea-telegram bug that sends commands twice
-  return (data && data.commands ? data.commands / 2 : 0) +
+  return (data && data.commands ? data.commands : 0) +
     ' ' + emoji.thought_balloon
 }
 
@@ -99,43 +99,48 @@ function apply (arr, x) {
 function showStats (what, data) {
   return 'Stats for "' + what + '": ' +
     apply(
-      [msgStats, cmdStats, stickerStats, photoStats, audioStats, videoStats]
+      [msgStats, stickerStats, photoStats, audioStats, videoStats]
     , data)
     .join(' | ')
 }
 
-// event listeners
-client.on('message', processEventFactory('messages'))
-client.on('audio', processEventFactory('audio'))
-client.on('voice', processEventFactory('audio'))
-client.on('video', processEventFactory('video'))
-client.on('photo', processEventFactory('photo'))
-client.on('sticker', processEventFactory('sticker'))
-
-client.on('command', function (event) {
-  processEvent(event, 'commands')
-
-  var c = name(event && event.channel)
-  var u = name(event && event.user)
-
-  switch (event.cmd) {
+function processCommand (msg, command) {
+  var c = name(msg.chat)
+  var u = name(msg.from)
+  switch (command) {
     case 'stats':
-      var repl
-      if (event.channel) {
-        repl = showStats(c, db.channels[c])
-        if (event.args.length > 0) {
-          var user = event.args[0]
-          // FIXME: dat injection
-          repl = showStats(user + '" in "' + c, db.channels[c].users[user])
-        }
-      } else repl = showStats(u, db.users[u])
-      event.reply(repl)
+      var repl = ''
+	  var channel  = db.channels[c]
+	  users = Object.keys(channel.users)
+	  for (var i = 0; i < users.length; i++) {
+		 repl += showStats(users[i], channel.users[users[i]])
+		 if (i < users.length + 1) {
+			 repl += '\n'
+		 }
+	  }
+      bot.sendMessage(msg.chat.id, repl)
       break
     case 'help':
-      event.reply('https://github.com/omnidan/statsbot/blob/master/README.md')
+      bot.sendMessage(msg.chat.id, 'https://github.com/omnidan/statsbot/blob/master/README.md')
       break
     case 'emoji':
-      event.reply('https://github.com/omnidan/statsbot/blob/master/README.md#what-do-the-emoji-mean')
+      bot.sendMessage(msg.chat.id, 'https://github.com/omnidan/statsbot/blob/master/README.md#what-do-the-emoji-mean')
       break
   }
+}
+
+// event listeners
+bot.on('audio', processEventFactory('audio'))
+bot.on('voice', processEventFactory('audio'))
+bot.on('video', processEventFactory('video'))
+bot.on('photo', processEventFactory('photo'))
+bot.on('sticker', processEventFactory('sticker'))
+
+bot.on('message', function (msg) {
+	if(msg.text && msg.text.charAt(0) === '/') {
+		var command = msg.text.substring(1, msg.text.length)
+		processCommand(msg, command)
+	} else {
+		processEvent(msg, 'messages')
+	}
 })
