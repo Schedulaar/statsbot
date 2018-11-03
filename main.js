@@ -1,12 +1,16 @@
 // statsbot
 var fs = require('fs')
+var path = require('path')
+
+const statsPath = path.resolve(__dirname, 'stats.json')
+const configPath = path.resolve(__dirname, 'config.json')
 
 function save(db) {
-	fs.writeFileSync('./stats.json', JSON.stringify(db));
+	fs.writeFileSync(statsPath, JSON.stringify(db));
 }
 
 function read() {
-	return fs.existsSync('./stats.json') ? JSON.parse(fs.readFileSync('./stats.json')) : {}
+	return fs.existsSync(statsPath) ? JSON.parse(fs.readFileSync(statsPath)) : {}
 }
 
 var log = require('log-simple')()
@@ -15,7 +19,7 @@ var VERSION = '0.1.2'
 log.info('statsbot v' + VERSION)
 
 // configuration
-var config = require('./config.json')
+var config = require(configPath)
 if (config && config.debug) {
   log.setDebug(config.debug)
 }
